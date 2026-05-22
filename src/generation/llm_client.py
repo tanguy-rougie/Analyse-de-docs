@@ -15,7 +15,16 @@ def generate_rag_answer(
 ) -> str:
     """Dispatch to OpenAI, Mistral, or Ollama chat completion."""
     if config.provider == "openai":
-        return _openai_chat(messages, config.openai_model, base_url=None, api_key=None)
+        key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not key:
+            raise ValueError(
+                "OPENAI_API_KEY est requis pour LLM_PROVIDER=openai. "
+                "Créez un fichier .env à la racine du dépôt (copie de .env.example) "
+                "ou exportez la variable d'environnement."
+            )
+        return _openai_chat(
+            messages, config.openai_model, base_url=None, api_key=key
+        )
     if config.provider == "mistral":
         key = os.environ.get("MISTRAL_API_KEY", "").strip()
         if not key:
@@ -76,12 +85,24 @@ def _ollama_chat(
 ) -> str:
     url = f"{base_url.rstrip('/')}/api/chat"
     payload = {"model": model, "messages": messages, "stream": False}
-    # Génération locale CPU peut dépasser 2 min ; timeout configurable (OLLAMA_HTTP_TIMEOUT).
     t = max(30.0, float(timeout))
-    with httpx.Client(timeout=t) as client:
-        r = client.post(url, json=payload)
-        r.raise_for_status()
-        data = r.json()
+    try:
+        with httpx.Client(timeout=t) as client:
+            r = client.post(url, json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.ConnectError as e:
+        raise ValueError(
+            f"Impossible de joindre Ollama à {base_url}. "
+            "Démarrez Ollama (application ou `ollama serve`), puis vérifiez OLLAMA_BASE_URL."
+        ) from e
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise ValueError(
+                f"Modèle Ollama {model!r} introuvable. "
+                f"Installez-le avec : ollama pull {model}"
+            ) from e
+        raise ValueError(f"Erreur Ollama ({e.response.status_code}) : {e.response.text}") from e
     msg = data.get("message") or {}
     content = msg.get("content", "")
     return content.strip() if isinstance(content, str) else ""

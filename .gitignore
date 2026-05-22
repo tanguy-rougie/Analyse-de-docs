@@ -463,3 +463,9 @@ $RECYCLE.BIN/
 
 # Sorties locales des tests RAG (peuvent contenir du contenu sensible)
 eval/manual_runs.jsonl
+
+# Données locales du projet (non versionnées)
+chroma_db/
+Documents/*
+!Documents/.gitkeep
+*.pdf

@@ -2,6 +2,18 @@
 
 Une entreprise veut permettre à ses ingénieurs d'interroger en langage naturel une base de documentation technique (specs, manuels, rapports). Le dépôt vise un pipeline RAG complet, évalué et déployable.
 
+## Démarrage rapide
+
+1. **Environnement** : `conda env create -f environment.yml` puis `conda activate analyse-de-docs`
+2. **Configuration** : `copy .env.example .env` — Ollama + `llama3.2` par défaut (`ollama pull llama3.2`)
+3. **PDF** : placer les fichiers dans `Documents/` (non versionné)
+4. **Indexation** : `python -m src.ingestion --input-dir ./Documents --collection technical_docs --reset` → crée `chroma_db/` (non versionné)
+5. **Interface** : `python -m src.web` → [http://localhost:8000](http://localhost:8000)
+
+**Docker** : `docker compose up --build`, puis `docker compose exec ollama ollama pull llama3.2`
+
+Après un clone, refaire les étapes 3–5 (les données locales ne sont pas sur GitHub).
+
 ## Pipeline d’ingestion (PDF → chunks → embeddings → ChromaDB)
 
 ### Prérequis
@@ -103,14 +115,14 @@ Pour activer le rerank : `USE_RERANKING=true` et augmenter `RETRIEVE_K` (ex. `20
 | `RERANK_TOP_N` | `5` | Passages gardés pour le contexte LLM |
 | `USE_RERANKING` | `false` | `true` pour CrossEncoder après Chroma |
 | `CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Modèle sentence-transformers pour le rerank |
-| `LLM_PROVIDER` | `openai` | `openai`, `mistral`, ou `ollama` |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Modèle OpenAI (`OPENAI_API_KEY` requis) |
+| `LLM_PROVIDER` | `ollama` | `ollama` (défaut), `openai`, ou `mistral` |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Serveur Ollama local |
+| `OLLAMA_MODEL` | `llama3.2` | Modèle Ollama (`ollama pull llama3.2` si absent) |
+| `OLLAMA_HTTP_TIMEOUT` | `600` | Timeout HTTP (secondes) pour `/api/chat` — utile sur CPU lent |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Modèle OpenAI (`OPENAI_API_KEY` requis si `LLM_PROVIDER=openai`) |
 | `MISTRAL_API_KEY` | — | Requis si `LLM_PROVIDER=mistral` |
 | `MISTRAL_MODEL` | `mistral-small-latest` | Modèle Mistral |
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | API compatible schéma OpenAI |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Serveur Ollama |
-| `OLLAMA_MODEL` | `llama3.2` | Modèle Ollama |
-| `OLLAMA_HTTP_TIMEOUT` | `600` | Timeout HTTP (secondes) pour `/api/chat` — utile sur CPU lent |
 
 Les variables d’ingestion (`CHROMA_PERSIST_DIR`, `EMBEDDING_MODEL`, …) doivent correspondre à celles utilisées lors de l’indexation.
 
@@ -148,4 +160,78 @@ La sortie JSON contient : `answer`, `sources` (fichier, page, `distance`, `cosin
 - `src/generation/prompts.py` — prompt système + contexte borné
 - `src/generation/llm_client.py` — OpenAI / Mistral / Ollama
 
-Étapes suivantes prévues pour le cas d’étude : évaluation RAGAS, comparaison de configurations, API FastAPI, Docker, interface Streamlit.
+## Interface web (FastAPI)
+
+Interface pour saisir une question en langage naturel et afficher la réponse RAG avec les sources.
+
+### Prérequis
+
+- Index Chroma déjà ingéré (voir section ingestion).
+- **Ollama** installé et démarré, modèle **llama3.2** disponible :
+
+```bash
+ollama pull llama3.2
+```
+
+(Sous Windows, l’app Ollama suffit en général ; le serveur écoute sur `http://127.0.0.1:11434`.)
+
+### Variables d’environnement (web)
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `RAG_COLLECTION` | `technical_docs` | Collection interrogée |
+| `WEB_HOST` | `0.0.0.0` | Adresse d’écoute uvicorn |
+| `WEB_PORT` | `8000` | Port HTTP |
+
+### Lancement local
+
+1. Copier [`.env.example`](.env.example) vers `.env` (déjà prévu pour **Ollama + llama3.2**).
+2. Vérifier qu’Ollama tourne et que le modèle est installé (`ollama pull llama3.2`).
+3. Démarrer le serveur :
+
+```bash
+python -m src.web
+```
+
+Le fichier `.env` est chargé automatiquement. Variables par défaut : `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=llama3.2`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`.
+
+Ouvrir [http://localhost:8000](http://localhost:8000). L’API REST est disponible sur `POST /api/ask` avec un body JSON `{ "question": "...", "verbose": false }`.
+
+Pour OpenAI ou Mistral à la place, modifiez `LLM_PROVIDER` et les clés dans `.env`.
+
+### Code
+
+- `src/web/app.py` — routes FastAPI
+- `src/web/static/index.html` — formulaire
+- `src/web/__main__.py` — serveur uvicorn
+
+## Docker
+
+### Prérequis
+
+- Docker et Docker Compose.
+- Fichier `.env` à la racine (copier depuis `.env.example` ; pour Docker, `OLLAMA_BASE_URL` est surchargé par Compose vers `http://ollama:11434`).
+
+### Lancer l’interface web (app + Ollama)
+
+```bash
+docker compose up --build
+```
+
+Puis [http://localhost:8000](http://localhost:8000). Le service **ollama** démarre avec l’app ; LLM par défaut : **llama3.2**.
+
+Première utilisation — télécharger le modèle dans le conteneur Ollama :
+
+```bash
+docker compose exec ollama ollama pull llama3.2
+```
+
+Volumes montés : `./chroma_db` (index), `./Documents` (PDF), cache Hugging Face (`hf_cache`).
+
+### Ingestion dans le conteneur
+
+```bash
+docker compose run --rm app python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
+```
+
+Étapes suivantes prévues pour le cas d’étude : évaluation RAGAS, comparaison de configurations.

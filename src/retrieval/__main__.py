@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from src.env import load_env
+
+load_env()
+
 import argparse
 import json
 import sys

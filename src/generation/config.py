@@ -35,7 +35,7 @@ class GenerationConfig:
     @classmethod
     def from_env(cls) -> GenerationConfig:
         return cls(
-            provider=_env_str("LLM_PROVIDER", "openai").lower(),
+            provider=_env_str("LLM_PROVIDER", "ollama").lower(),
             openai_model=_env_str("OPENAI_MODEL", "gpt-4o-mini"),
             mistral_base_url=_env_str(
                 "MISTRAL_BASE_URL",
