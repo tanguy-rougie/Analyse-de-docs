@@ -1,0 +1,19 @@
+name: analyse-de-docs
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.13
+  - pip
+  - pip:
+      - chromadb>=0.4.22
+      - sentence-transformers>=2.2.0
+      - pypdf>=4.0.0
+      - langchain-core>=0.2.0
+      - langchain-text-splitters>=0.2.0
+      - transformers>=4.36.0
+      - torch>=2.0.0
+      - httpx>=0.27.0
+      - openai>=1.0.0
+      - fastapi>=0.110.0
+      - uvicorn[standard]>=0.27.0
+      - python-dotenv>=1.0.0

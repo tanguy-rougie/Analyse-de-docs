@@ -1,0 +1,11 @@
+# Une question par ligne (# = commentaire). Corpus type : articles RAG / PDF / NLP (Archives 2–8).
+# Batch : python scripts/run_manual_questions.py
+
+De quoi parle chaque document principal ?
+Qu’est-ce que la génération augmentée par recherche (RAG) et à quels types de tâches NLP est-elle associée dans les extraits ?
+Quel problème les documents relient-ils aux PDF et aux systèmes de question-réponse avec LLM ?
+Comment ChatDOC ou la reconnaissance de structure de PDF est-elle présentée par rapport au RAG ?
+Qu’est-ce que « évaluer la qualité de la recherche » dans un pipeline RAG selon les références bibliographiques citées ?
+Les extraits mentionnent-ils LangChain ou des API d’embedding ? Dans quel rôle ?
+Résume en trois phrases ce qu’un ingénieur doit retenir sur les limites du RAG classique sur PDF.
+Y a-t-il dans les passages indexés du code Python lié aux citations de fichiers ou aux annotations ?

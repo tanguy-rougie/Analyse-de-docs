@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      CHROMA_PERSIST_DIR: /app/chroma_db
+      WEB_HOST: "0.0.0.0"
+      WEB_PORT: "8000"
+      RAG_COLLECTION: technical_docs
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2
+      OLLAMA_HTTP_TIMEOUT: "600"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./Documents:/app/Documents
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  hf_cache:
+  ollama_data:

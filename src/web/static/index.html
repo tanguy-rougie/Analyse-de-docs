@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Analyse-de-docs — RAG</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --accent-hover: #5a9fff;
+      --error: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin: 0 0 0.25rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      resize: vertical;
+    }
+    textarea:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 0.75rem;
+      flex-wrap: wrap;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.25rem;
+      border-radius: 8px;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    .checkbox input { accent-color: var(--accent); }
+    #status {
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    #status.error { color: var(--error); }
+    #answer {
+      margin-top: 1.25rem;
+      padding: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      white-space: pre-wrap;
+      display: none;
+    }
+    #answer.visible { display: block; }
+    #sources {
+      margin-top: 1rem;
+      display: none;
+    }
+    #sources.visible { display: block; }
+    #sources h2 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 0 0 0.5rem;
+      color: var(--muted);
+    }
+    .source-item {
+      font-size: 0.85rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .source-item:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Documentation technique</h1>
+    <p class="subtitle">Posez une question en langage naturel sur les documents indexés.</p>
+
+    <form id="form">
+      <label for="question">Votre question</label>
+      <textarea id="question" name="question" placeholder="Ex. : De quoi parle le document principal ?" required></textarea>
+      <div class="row">
+        <button type="submit" id="submit">Envoyer</button>
+        <label class="checkbox">
+          <input type="checkbox" id="verbose" name="verbose">
+          Afficher les aperçus de chunks
+        </label>
+      </div>
+    </form>
+
+    <p id="status" aria-live="polite"></p>
+    <div id="answer" role="region" aria-label="Réponse"></div>
+    <section id="sources" aria-label="Sources">
+      <h2>Sources</h2>
+      <div id="sources-list"></div>
+    </section>
+  </div>
+
+  <script>
+    const form = document.getElementById("form");
+    const questionEl = document.getElementById("question");
+    const verboseEl = document.getElementById("verbose");
+    const submitBtn = document.getElementById("submit");
+    const statusEl = document.getElementById("status");
+    const answerEl = document.getElementById("answer");
+    const sourcesSection = document.getElementById("sources");
+    const sourcesList = document.getElementById("sources-list");
+
+    function setStatus(msg, isError) {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle("error", !!isError);
+    }
+
+    function formatSource(s) {
+      const file = s.file_stem || s.source || "—";
+      const page = s.page != null ? `, p. ${s.page}` : "";
+      const cos = s.cosine_similarity != null
+        ? `, cos ≈ ${Number(s.cosine_similarity).toFixed(3)}`
+        : "";
+      return `${file}${page}${cos}`;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const question = questionEl.value.trim();
+      if (!question) {
+        setStatus("Veuillez saisir une question.", true);
+        return;
+      }
+
+      submitBtn.disabled = true;
+      answerEl.classList.remove("visible");
+      sourcesSection.classList.remove("visible");
+      setStatus("Recherche en cours…");
+
+      try {
+        const res = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question,
+            verbose: verboseEl.checked,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          const detail = data.detail;
+          const msg = typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((d) => d.msg || JSON.stringify(d)).join(" ")
+              : "Erreur lors de la requête.";
+          setStatus(msg, true);
+          return;
+        }
+
+        answerEl.textContent = data.answer || "(Aucune réponse)";
+        answerEl.classList.add("visible");
+
+        sourcesList.innerHTML = "";
+        if (data.sources && data.sources.length) {
+          data.sources.forEach((s) => {
+            const div = document.createElement("div");
+            div.className = "source-item";
+            div.textContent = formatSource(s);
+            sourcesList.appendChild(div);
+          });
+          sourcesSection.classList.add("visible");
+        }
+
+        const rerank = data.used_reranking ? " (rerank activé)" : "";
+        setStatus(`Réponse obtenue${rerank}.`);
+      } catch (err) {
+        setStatus(err.message || "Erreur réseau.", true);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
