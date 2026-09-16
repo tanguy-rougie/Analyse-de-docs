@@ -182,6 +182,30 @@ ollama pull llama3.2
 | `RAG_COLLECTION` | `technical_docs` | Collection interrogée |
 | `WEB_HOST` | `0.0.0.0` | Adresse d’écoute uvicorn |
 | `WEB_PORT` | `8000` | Port HTTP |
+| `DATABASE_URL` | `postgresql+psycopg://analyse:analyse@localhost:5432/analyse` | PostgreSQL pour les **jobs** (pas pour les vecteurs) |
+
+### Jobs (étape 1)
+
+L’API **enregistre** un travail dans PostgreSQL ; elle ne l’exécute pas encore (le worker arrive à l’étape suivante). États : `PENDING` → plus tard `RUNNING` → `COMPLETED` / `FAILED`.
+
+Couches (à lire dans cet ordre) :
+
+1. Contrôleur HTTP : [`src/web/controllers/jobs.py`](src/web/controllers/jobs.py)
+2. Service : [`src/jobs/service.py`](src/jobs/service.py)
+3. Repository : [`src/jobs/repository.py`](src/jobs/repository.py)
+4. Modèle / table : [`src/jobs/models.py`](src/jobs/models.py)
+
+```bash
+curl -s http://localhost:8000/health
+curl -s -X POST http://localhost:8000/jobs -H "Content-Type: application/json" -d "{\"job_type\":\"simulate\"}"
+curl -s http://localhost:8000/jobs/<job_id>
+```
+
+PostgreSQL local sans tout lancer : `docker compose up -d postgres`, puis `python -m src.web`.
+
+`SELECT FOR UPDATE SKIP LOCKED` n’est **pas** utilisé : un seul worker suffira. Ce verrouillage sert uniquement si plusieurs workers risquent de prendre **le même** job en même temps.
+
+ChromaDB reste le vector store. PostgreSQL ne stocke ici que les jobs. `Documents/` est un dossier local de PDF, pas un équivalent de S3.
 
 ### Lancement local
 
@@ -195,14 +219,16 @@ python -m src.web
 
 Le fichier `.env` est chargé automatiquement. Variables par défaut : `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=llama3.2`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`.
 
-Ouvrir [http://localhost:8000](http://localhost:8000). L’API REST est disponible sur `POST /api/ask` avec un body JSON `{ "question": "...", "verbose": false }`.
+Ouvrir [http://localhost:8000](http://localhost:8000). L’API REST : `GET /health`, `POST /jobs`, `GET /jobs/{job_id}`, `POST /api/ask` (body `{ "question": "...", "verbose": false }`).
 
 Pour OpenAI ou Mistral à la place, modifiez `LLM_PROVIDER` et les clés dans `.env`.
 
 ### Code
 
-- `src/web/app.py` — routes FastAPI
-- `src/web/static/index.html` — formulaire
+- `src/web/app.py` — application FastAPI (Q&A + branchement des contrôleurs)
+- `src/web/controllers/` — routes `/health` et `/jobs`
+- `src/jobs/` — persistance PostgreSQL des jobs
+- `src/web/static/index.html` — formulaire Q&A
 - `src/web/__main__.py` — serveur uvicorn
 
 ## Docker
@@ -212,7 +238,7 @@ Pour OpenAI ou Mistral à la place, modifiez `LLM_PROVIDER` et les clés dans `.
 - Docker et Docker Compose.
 - Fichier `.env` à la racine (copier depuis `.env.example` ; pour Docker, `OLLAMA_BASE_URL` est surchargé par Compose vers `http://ollama:11434`).
 
-### Lancer l’interface web (app + Ollama)
+### Lancer l’interface web (app + PostgreSQL + Ollama)
 
 ```bash
 docker compose up --build
@@ -226,7 +252,7 @@ Première utilisation — télécharger le modèle dans le conteneur Ollama :
 docker compose exec ollama ollama pull llama3.2
 ```
 
-Volumes montés : `./chroma_db` (index), `./Documents` (PDF), cache Hugging Face (`hf_cache`).
+Volumes : `./chroma_db` (index Chroma, vector store actuel), `./Documents` (PDF en local), cache Hugging Face (`hf_cache`), volume `postgres_data` (table `jobs`).
 
 ### Ingestion dans le conteneur
 

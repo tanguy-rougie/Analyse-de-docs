@@ -4,7 +4,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       CHROMA_PERSIST_DIR: /app/chroma_db
       WEB_HOST: "0.0.0.0"
@@ -14,12 +15,32 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: llama3.2
       OLLAMA_HTTP_TIMEOUT: "600"
+      DATABASE_URL: postgresql+psycopg://analyse:analyse@postgres:5432/analyse
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./Documents:/app/Documents
       - hf_cache:/root/.cache/huggingface
     depends_on:
-      - ollama
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: analyse
+      POSTGRES_PASSWORD: analyse
+      POSTGRES_DB: analyse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyse -d analyse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   ollama:
     image: ollama/ollama:latest
@@ -31,3 +52,4 @@ services:
 volumes:
   hf_cache:
   ollama_data:
+  postgres_data:
