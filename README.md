@@ -8,7 +8,7 @@ Une entreprise veut permettre à ses ingénieurs d'interroger en langage naturel
 2. **Configuration** : `copy .env.example .env` — Ollama + `llama3.2` par défaut (`ollama pull llama3.2`)
 3. **PDF** : placer les fichiers dans `Documents/` (non versionné)
 4. **Indexation** : `python -m src.ingestion --input-dir ./Documents --collection technical_docs --reset` → crée `chroma_db/` (non versionné)
-5. **Interface** : `python -m src.web` → [http://localhost:8000](http://localhost:8000)
+5. **Interface** : `python -m src.web` → [http://localhost:8000](http://localhost:8000) ; pour les jobs, lancer aussi `python -m src.worker` dans un second terminal
 
 **Docker** : `docker compose up --build`, puis `docker compose exec ollama ollama pull llama3.2`
 
@@ -263,15 +263,37 @@ Pour OpenAI ou Mistral à la place, modifiez `LLM_PROVIDER` et les clés dans `.
 ### Prérequis
 
 - Docker et Docker Compose.
-- Fichier `.env` à la racine (copier depuis `.env.example` ; pour Docker, `OLLAMA_BASE_URL` est surchargé par Compose vers `http://ollama:11434`).
+- Fichier `.env` optionnel à la racine (copier depuis `.env.example`). Compose surcharge `OLLAMA_BASE_URL` vers `http://ollama:11434` et `DATABASE_URL` vers le service `postgres`.
 
-### Lancer l’interface web (app + PostgreSQL + Ollama)
+### Services (étape 3)
+
+Un conteneur par rôle, sur le réseau interne de Compose :
+
+| Service | Rôle | Port hôte |
+|---------|------|-----------|
+| `api` | FastAPI : `/health`, `/jobs`, `/api/ask` | `8000` |
+| `worker` | Exécute les jobs, aucun port exposé | — |
+| `postgres` | Table `jobs` | `5432` |
+| `ollama` | LLM local pour le Q&A | `11434` |
+
+`api` et `worker` partagent **la même image** (`analyse-de-docs-app:local`, construite depuis le [`Dockerfile`](Dockerfile)) : seule la commande de démarrage diffère (`python -m src.web` contre `python -m src.worker`). Un seul code, deux processus — comme deux tâches lancées depuis une même image sur un orchestrateur.
+
+`depends_on` + healthchecks donnent un ordre de démarrage : l’`api` et le `worker` attendent que Postgres réponde à `pg_isready`. L’`api` a son propre healthcheck qui appelle `/health`.
+
+Docker Compose sert ici d’**orchestrateur local pédagogique**. Ce n’est pas un équivalent technique d’ECS/Fargate ; il reproduit seulement les concepts (services séparés, réseau interne, variables d’environnement, dépendances).
+
+### Lancer la stack
 
 ```bash
 docker compose up --build
 ```
 
-Puis [http://localhost:8000](http://localhost:8000). Le service **ollama** démarre avec l’app ; LLM par défaut : **llama3.2**.
+Puis [http://localhost:8000](http://localhost:8000). Vérifier l’état des conteneurs :
+
+```bash
+docker compose ps
+docker compose logs -f worker   # voir les jobs passer RUNNING puis COMPLETED
+```
 
 Première utilisation — télécharger le modèle dans le conteneur Ollama :
 
@@ -283,8 +305,10 @@ Volumes : `./chroma_db` (index Chroma, vector store actuel), `./Documents` (PDF 
 
 ### Ingestion dans le conteneur
 
+L’image contenant tout le code, la CLI d’ingestion reste disponible telle quelle :
+
 ```bash
-docker compose run --rm app python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
+docker compose run --rm worker python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
 ```
 
 Étapes suivantes prévues pour le cas d’étude : évaluation RAGAS, comparaison de configurations.

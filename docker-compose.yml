@@ -1,6 +1,9 @@
+# Orchestrateur local (pédagogique) : un conteneur par rôle.
+# api et worker partagent la même image ; seule la commande de démarrage change.
 services:
-  app:
+  api:
     build: .
+    image: analyse-de-docs-app:local
     ports:
       - "8000:8000"
     env_file:
@@ -25,6 +28,32 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    build: .
+    image: analyse-de-docs-app:local
+    command: ["python", "-m", "src.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CHROMA_PERSIST_DIR: /app/chroma_db
+      DATABASE_URL: postgresql+psycopg://analyse:analyse@postgres:5432/analyse
+      WORKER_POLL_INTERVAL: "2"
+      WORKER_SIMULATED_DURATION: "3"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./Documents:/app/Documents
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:16
