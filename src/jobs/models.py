@@ -15,7 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.jobs.database import Base
 
 
-def _utcnow() -> datetime:
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
@@ -46,13 +46,13 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=_utcnow,
+        default=utcnow,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
+        default=utcnow,
+        onupdate=utcnow,
     )
     started_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),

@@ -183,10 +183,12 @@ ollama pull llama3.2
 | `WEB_HOST` | `0.0.0.0` | Adresse d’écoute uvicorn |
 | `WEB_PORT` | `8000` | Port HTTP |
 | `DATABASE_URL` | `postgresql+psycopg://analyse:analyse@localhost:5432/analyse` | PostgreSQL pour les **jobs** (pas pour les vecteurs) |
+| `WORKER_POLL_INTERVAL` | `2` | Secondes entre deux interrogations de la file quand elle est vide |
+| `WORKER_SIMULATED_DURATION` | `3` | Durée du traitement simulé (secondes) |
 
 ### Jobs (étape 1)
 
-L’API **enregistre** un travail dans PostgreSQL ; elle ne l’exécute pas encore (le worker arrive à l’étape suivante). États : `PENDING` → plus tard `RUNNING` → `COMPLETED` / `FAILED`.
+L’API **enregistre** un travail dans PostgreSQL ; elle ne l’exécute pas (c’est le worker qui s’en charge). États : `PENDING` → `RUNNING` → `COMPLETED` / `FAILED`.
 
 Couches (à lire dans cet ordre) :
 
@@ -203,9 +205,33 @@ curl -s http://localhost:8000/jobs/<job_id>
 
 PostgreSQL local sans tout lancer : `docker compose up -d postgres`, puis `python -m src.web`.
 
-`SELECT FOR UPDATE SKIP LOCKED` n’est **pas** utilisé : un seul worker suffira. Ce verrouillage sert uniquement si plusieurs workers risquent de prendre **le même** job en même temps.
-
 ChromaDB reste le vector store. PostgreSQL ne stocke ici que les jobs. `Documents/` est un dossier local de PDF, pas un équivalent de S3.
+
+### Worker (étape 2)
+
+Processus **séparé** de l’API : il interroge la table `jobs`, prend le plus ancien `PENDING`, le passe en `RUNNING`, exécute le travail, puis écrit `COMPLETED` ou `FAILED`. L’API n’exécute rien elle-même (pas de `BackgroundTasks`).
+
+Le traitement est encore **simulé** (`time.sleep`) : le branchement sur le pipeline d’ingestion viendra plus tard.
+
+```bash
+# terminal 1
+python -m src.web
+# terminal 2
+python -m src.worker
+```
+
+Créer un job puis suivre son état :
+
+```bash
+curl -s -X POST http://localhost:8000/jobs -H "Content-Type: application/json" -d "{\"job_type\":\"simulate\"}"
+curl -s http://localhost:8000/jobs/<job_id>   # RUNNING, puis COMPLETED
+```
+
+Pour observer un échec, utiliser `"job_type": "fail"` : le job finit en `FAILED` avec `error_message` rempli.
+
+Code : [`src/worker/__main__.py`](src/worker/__main__.py) (boucle), [`src/worker/runner.py`](src/worker/runner.py) (traitement d’un job), [`src/worker/config.py`](src/worker/config.py).
+
+`SELECT FOR UPDATE SKIP LOCKED` n’est **pas** utilisé : avec un seul worker, personne ne peut prendre le même job en même temps. Ce verrouillage ne deviendrait utile qu’en lançant plusieurs workers en parallèle.
 
 ### Lancement local
 
@@ -228,6 +254,7 @@ Pour OpenAI ou Mistral à la place, modifiez `LLM_PROVIDER` et les clés dans `.
 - `src/web/app.py` — application FastAPI (Q&A + branchement des contrôleurs)
 - `src/web/controllers/` — routes `/health` et `/jobs`
 - `src/jobs/` — persistance PostgreSQL des jobs
+- `src/worker/` — exécution des jobs, hors API
 - `src/web/static/index.html` — formulaire Q&A
 - `src/web/__main__.py` — serveur uvicorn
 
