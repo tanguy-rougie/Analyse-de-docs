@@ -8,7 +8,7 @@ Une entreprise veut permettre à ses ingénieurs d'interroger en langage naturel
 2. **Configuration** : `copy .env.example .env` — Ollama + `llama3.2` par défaut (`ollama pull llama3.2`)
 3. **PDF** : placer les fichiers dans `Documents/` (non versionné)
 4. **Indexation** : `python -m src.ingestion --input-dir ./Documents --collection technical_docs --reset` → crée `chroma_db/` (non versionné)
-5. **Interface** : `python -m src.web` → [http://localhost:8000](http://localhost:8000) ; pour les jobs, lancer aussi `python -m src.worker` dans un second terminal
+5. **Interface** : `python -m src.web` → [http://localhost:8000](http://localhost:8000) ; pour les jobs, lancer aussi `python -m src.worker` dans un second terminal. En Docker, interface Streamlit sur [http://localhost:8501](http://localhost:8501)
 
 **Docker** : `docker compose up --build`, puis `docker compose exec ollama ollama pull llama3.2`
 
@@ -271,6 +271,7 @@ Un conteneur par rôle, sur le réseau interne de Compose :
 
 | Service | Rôle | Port hôte |
 |---------|------|-----------|
+| `frontend` | Interface Streamlit, cliente HTTP de l’`api` | `8501` |
 | `api` | FastAPI : `/health`, `/jobs`, `/api/ask` | `8000` |
 | `worker` | Exécute les jobs, aucun port exposé | — |
 | `postgres` | Table `jobs` | `5432` |
@@ -289,7 +290,7 @@ Docker Compose sert ici d’**orchestrateur local pédagogique**. Ce n’est pas
 docker compose up --build
 ```
 
-Puis [http://localhost:8000](http://localhost:8000). Vérifier l’état des conteneurs :
+Puis [http://localhost:8501](http://localhost:8501) (Streamlit) ou [http://localhost:8000](http://localhost:8000) (API et page HTML). Vérifier l’état des conteneurs :
 
 ```bash
 docker compose ps
@@ -311,6 +312,29 @@ L’image contenant tout le code, la CLI d’ingestion reste disponible telle qu
 ```bash
 docker compose run --rm worker python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
 ```
+
+## Interface Streamlit (étape 5)
+
+Interface unique pour les deux usages : poser une question (synchrone) et créer puis suivre un job (asynchrone).
+
+```bash
+docker compose up -d
+```
+
+Puis [http://localhost:8501](http://localhost:8501).
+
+- **Poser une question** → `POST /api/ask` : réponse et sources affichées directement. Nécessite Ollama et un index Chroma.
+- **Jobs** → `POST /jobs` crée le travail, puis « Actualiser l’état » appelle `GET /jobs/{id}` : on voit `PENDING`, `RUNNING`, puis `COMPLETED` (ou `FAILED` avec le type `fail`).
+
+Le frontend ne parle **qu’à l’API** : pas d’accès à PostgreSQL, pas d’import du pipeline RAG. Son image ([`frontend/Dockerfile`](frontend/Dockerfile)) ne contient que `streamlit` et `httpx` — environ 0,8 Go contre 2,8 Go pour l’image applicative, qui embarque torch et chromadb.
+
+Hors Docker, il faut indiquer où joindre l’API :
+
+```bash
+API_BASE_URL=http://localhost:8000 streamlit run frontend/app.py
+```
+
+La page HTML servie par FastAPI sur [http://localhost:8000](http://localhost:8000) reste disponible ; les deux interfaces coexistent.
 
 ## Registry Docker local (étape 4)
 
