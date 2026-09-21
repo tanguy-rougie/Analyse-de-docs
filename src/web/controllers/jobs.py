@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 class CreateJobRequest(BaseModel):
-    job_type: str = Field(default="simulate", description="Type de travail (simulate, puis ingest).")
+    job_type: str = Field(default="simulate", description="ingest, simulate ou fail.")
     input_dir: str = Field(default="./Documents")
     collection: str = Field(default="technical_docs")
     reset: bool = False
@@ -27,6 +27,7 @@ class JobResponse(BaseModel):
     id: uuid.UUID
     status: str
     payload: dict
+    result: dict | None
     error_message: str | None
     created_at: datetime
     updated_at: datetime
@@ -39,6 +40,7 @@ def _to_response(job: Job) -> JobResponse:
         id=job.id,
         status=job.status,
         payload=job.payload or {},
+        result=job.result,
         error_message=job.error_message,
         created_at=job.created_at,
         updated_at=job.updated_at,

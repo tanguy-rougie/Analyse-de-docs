@@ -42,6 +42,8 @@ class Job(Base):
         default=JobStatus.PENDING.value,
     )
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Résumé produit par le worker (pages_loaded, chunks_written, ...).
+    result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

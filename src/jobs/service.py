@@ -32,9 +32,10 @@ class JobService:
         job.started_at = utcnow()
         return self._repo.save(job)
 
-    def mark_completed(self, job: Job) -> Job:
+    def mark_completed(self, job: Job, result: dict | None = None) -> Job:
         job.status = JobStatus.COMPLETED.value
         job.error_message = None
+        job.result = result
         job.finished_at = utcnow()
         return self._repo.save(job)
 

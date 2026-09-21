@@ -80,7 +80,7 @@ with onglet_jobs:
     st.caption("`POST /jobs` enregistre le travail ; c'est le worker qui l'exécute.")
 
     with st.form("creer_job"):
-        job_type = st.selectbox("Type", ["simulate", "fail"])
+        job_type = st.selectbox("Type", ["ingest", "simulate", "fail"])
         collection = st.text_input("Collection", value="technical_docs")
         input_dir = st.text_input("Dossier source", value="./Documents")
         reset = st.checkbox("Réinitialiser la collection")

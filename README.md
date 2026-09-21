@@ -184,11 +184,13 @@ ollama pull llama3.2
 | `WEB_PORT` | `8000` | Port HTTP |
 | `DATABASE_URL` | `postgresql+psycopg://analyse:analyse@localhost:5432/analyse` | PostgreSQL pour les **jobs** (pas pour les vecteurs) |
 | `WORKER_POLL_INTERVAL` | `2` | Secondes entre deux interrogations de la file quand elle est vide |
-| `WORKER_SIMULATED_DURATION` | `3` | Durée du traitement simulé (secondes) |
+| `WORKER_SIMULATED_DURATION` | `3` | Durée du traitement simulé, pour `job_type=simulate` (secondes) |
 
 ### Jobs (étape 1)
 
 L’API **enregistre** un travail dans PostgreSQL ; elle ne l’exécute pas (c’est le worker qui s’en charge). États : `PENDING` → `RUNNING` → `COMPLETED` / `FAILED`.
+
+Un job porte les paramètres d’entrée dans `payload` (`job_type`, `input_dir`, `collection`, `reset`) et, une fois terminé, le résumé produit par le worker dans `result`.
 
 Couches (à lire dans cet ordre) :
 
@@ -211,8 +213,6 @@ ChromaDB reste le vector store. PostgreSQL ne stocke ici que les jobs. `Document
 
 Processus **séparé** de l’API : il interroge la table `jobs`, prend le plus ancien `PENDING`, le passe en `RUNNING`, exécute le travail, puis écrit `COMPLETED` ou `FAILED`. L’API n’exécute rien elle-même (pas de `BackgroundTasks`).
 
-Le traitement est encore **simulé** (`time.sleep`) : le branchement sur le pipeline d’ingestion viendra plus tard.
-
 ```bash
 # terminal 1
 python -m src.web
@@ -220,14 +220,18 @@ python -m src.web
 python -m src.worker
 ```
 
-Créer un job puis suivre son état :
+Trois types de jobs, distingués par `job_type` dans [`src/worker/runner.py`](src/worker/runner.py) :
+
+| `job_type` | Effet |
+|------------|-------|
+| `ingest` | Appelle le pipeline d’ingestion réel (voir étape 6) |
+| `simulate` | Attend `WORKER_SIMULATED_DURATION` secondes, sans rien indexer |
+| `fail` | Lève une erreur pour observer l’état `FAILED` |
 
 ```bash
 curl -s -X POST http://localhost:8000/jobs -H "Content-Type: application/json" -d "{\"job_type\":\"simulate\"}"
 curl -s http://localhost:8000/jobs/<job_id>   # RUNNING, puis COMPLETED
 ```
-
-Pour observer un échec, utiliser `"job_type": "fail"` : le job finit en `FAILED` avec `error_message` rempli.
 
 Code : [`src/worker/__main__.py`](src/worker/__main__.py) (boucle), [`src/worker/runner.py`](src/worker/runner.py) (traitement d’un job), [`src/worker/config.py`](src/worker/config.py).
 
@@ -313,6 +317,45 @@ L’image contenant tout le code, la CLI d’ingestion reste disponible telle qu
 docker compose run --rm worker python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
 ```
 
+## Ingestion déclenchée par un job (étape 6)
+
+Le worker appelle maintenant le **pipeline d’ingestion existant**, sans le modifier : `ingest()` de [`src/ingestion/pipeline.py`](src/ingestion/pipeline.py), donc pypdf, chunking token-aware, embeddings `BAAI/bge-small-en-v1.5` et ChromaDB comme avant. Seul le déclencheur change : une ligne dans PostgreSQL au lieu d’une commande tapée à la main.
+
+```bash
+curl -s -X POST http://localhost:8000/jobs -H "Content-Type: application/json" \
+  -d '{"job_type":"ingest","input_dir":"./Documents","collection":"technical_docs","reset":true}'
+curl -s http://localhost:8000/jobs/<job_id>
+```
+
+Le résumé renvoyé par `ingest()` est stocké dans la colonne `result` et lisible via l’API :
+
+```json
+"result": {
+  "pages_loaded": 203,
+  "chunks_written": 485,
+  "collection": "technical_docs",
+  "persist_dir": "/app/chroma_db"
+}
+```
+
+En cas d’erreur, le job passe `FAILED` et `error_message` contient le message du pipeline (par exemple `Not a directory: /app/DossierInexistant`). Le worker continue de tourner : un job raté ne l’arrête pas.
+
+Suivre l’avancement pendant l’indexation :
+
+```bash
+docker compose logs -f worker
+```
+
+La CLI `python -m src.ingestion` reste disponible et fait exactement la même chose. Les deux chemins appellent la même fonction.
+
+**Changement de schéma** : la colonne `result` a été ajoutée à la table `jobs`. Sur une base créée avant cette étape, l’ajouter une fois :
+
+```bash
+docker compose exec postgres psql -U analyse -d analyse -c "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS result JSONB;"
+```
+
+`create_all` ne crée que les tables manquantes, jamais les colonnes manquantes. C’est précisément le besoin auquel répond un outil de migration comme Alembic, non utilisé ici pour garder le projet simple.
+
 ## Interface Streamlit (étape 5)
 
 Interface unique pour les deux usages : poser une question (synchrone) et créer puis suivre un job (asynchrone).
@@ -324,7 +367,7 @@ docker compose up -d
 Puis [http://localhost:8501](http://localhost:8501).
 
 - **Poser une question** → `POST /api/ask` : réponse et sources affichées directement. Nécessite Ollama et un index Chroma.
-- **Jobs** → `POST /jobs` crée le travail, puis « Actualiser l’état » appelle `GET /jobs/{id}` : on voit `PENDING`, `RUNNING`, puis `COMPLETED` (ou `FAILED` avec le type `fail`).
+- **Jobs** → `POST /jobs` crée le travail, puis « Actualiser l’état » appelle `GET /jobs/{id}` : on voit `PENDING`, `RUNNING`, puis `COMPLETED` (ou `FAILED` avec le type `fail`). Le type `ingest` lance la vraie indexation ; le résumé apparaît dans `result`.
 
 Le frontend ne parle **qu’à l’API** : pas d’accès à PostgreSQL, pas d’import du pipeline RAG. Son image ([`frontend/Dockerfile`](frontend/Dockerfile)) ne contient que `streamlit` et `httpx` — environ 0,8 Go contre 2,8 Go pour l’image applicative, qui embarque torch et chromadb.
 
