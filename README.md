@@ -317,9 +317,67 @@ L’image contenant tout le code, la CLI d’ingestion reste disponible telle qu
 docker compose run --rm worker python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
 ```
 
+## Registry Docker local (étape 4)
+
+Un **registry** est un dépôt d’images : on y **pousse** une image construite localement, et n’importe quelle machine ayant accès au dépôt peut la **tirer**. Le service `registry` reproduit ce cycle en local, sur `localhost:5001` (le port 5000 est occupé par AirPlay sur macOS).
+
+```bash
+./scripts/registry_cycle.sh v1
+```
+
+Le script enchaîne les quatre étapes, en les affichant :
+
+1. **build** — construire l’image depuis le [`Dockerfile`](Dockerfile) (`analyse-de-docs-app:local`)
+2. **tag** — la renommer avec l’adresse du dépôt : `localhost:5001/analyse-de-docs-app:v1`
+3. **push** — l’envoyer vers le registry
+4. **pull** — la récupérer (la référence locale est supprimée juste avant, pour vérifier que le pull la ramène vraiment)
+
+Le préfixe du tag n’est pas décoratif : c’est lui qui indique à Docker **vers quel dépôt** pousser et **depuis lequel** tirer.
+
+Inspecter le contenu du registry par son API HTTP :
+
+```bash
+curl -s http://localhost:5001/v2/_catalog
+curl -s http://localhost:5001/v2/analyse-de-docs-app/tags/list
+```
+
+Faire tourner la stack depuis l’image du registry plutôt que depuis un build local :
+
+```bash
+APP_IMAGE=localhost:5001/analyse-de-docs-app:v1 docker compose up -d api worker
+docker compose ps    # la colonne IMAGE montre l'image tirée du registry
+```
+
+Sans `APP_IMAGE`, Compose revient au build local (`analyse-de-docs-app:local`) : c’est le mode de travail quotidien.
+
+Le rôle est **conceptuellement** celui d’ECR : même cycle `build → tag → push → pull`, même logique de tags versionnés. Un registry managé y ajoute l’authentification, les droits d’accès, le scan de vulnérabilités et la réplication, absents ici.
+
+## Interface Streamlit (étape 5)
+
+Interface unique pour les deux usages : poser une question (synchrone) et créer puis suivre un job (asynchrone).
+
+```bash
+docker compose up -d
+```
+
+Puis [http://localhost:8501](http://localhost:8501).
+
+- **Poser une question** → `POST /api/ask` : réponse et sources affichées directement. Nécessite Ollama et un index Chroma.
+- **Jobs** → `POST /jobs` crée le travail, puis « Actualiser l’état » appelle `GET /jobs/{id}` : on voit `PENDING`, `RUNNING`, puis `COMPLETED` (ou `FAILED` avec le type `fail`). Le type `ingest` lance la vraie indexation ; le résumé apparaît dans `result`.
+
+Le frontend ne parle **qu’à l’API** : pas d’accès à PostgreSQL, pas d’import du pipeline RAG. Son image ([`frontend/Dockerfile`](frontend/Dockerfile)) ne contient que `streamlit` et `httpx` — environ 0,8 Go contre 2,8 Go pour l’image applicative, qui embarque torch et chromadb.
+
+Hors Docker, il faut indiquer où joindre l’API :
+
+```bash
+API_BASE_URL=http://localhost:8000 streamlit run frontend/app.py
+```
+
+La page HTML servie par FastAPI sur [http://localhost:8000](http://localhost:8000) reste disponible ; les deux interfaces coexistent.
+
 ## Ingestion déclenchée par un job (étape 6)
 
-Le worker appelle maintenant le **pipeline d’ingestion existant**, sans le modifier : `ingest()` de [`src/ingestion/pipeline.py`](src/ingestion/pipeline.py), donc pypdf, chunking token-aware, embeddings `BAAI/bge-small-en-v1.5` et ChromaDB comme avant. Seul le déclencheur change : une ligne dans PostgreSQL au lieu d’une commande tapée à la main.
+Le worker appelle le **pipeline d’ingestion existant**, sans le modifier : `ingest()` de [`src/ingestion/pipeline.py`](src/ingestion/pipeline.py), donc pypdf, chunking token-aware, embeddings `BAAI/bge-small-en-v1.5` et ChromaDB comme avant. Seul le déclencheur change : une ligne dans PostgreSQL au lieu d’une commande tapée à la main.
 
 ```bash
 curl -s -X POST http://localhost:8000/jobs -H "Content-Type: application/json" \
@@ -356,62 +414,17 @@ docker compose exec postgres psql -U analyse -d analyse -c "ALTER TABLE jobs ADD
 
 `create_all` ne crée que les tables manquantes, jamais les colonnes manquantes. C’est précisément le besoin auquel répond un outil de migration comme Alembic, non utilisé ici pour garder le projet simple.
 
-## Interface Streamlit (étape 5)
-
-Interface unique pour les deux usages : poser une question (synchrone) et créer puis suivre un job (asynchrone).
+## Tests
 
 ```bash
-docker compose up -d
+pytest
 ```
 
-Puis [http://localhost:8501](http://localhost:8501).
+- [`tests/test_worker_runner.py`](tests/test_worker_runner.py) — aiguillage du worker selon `job_type`, sans base ni indexation réelle (`ingest` est remplacé par un double).
+- [`tests/test_jobs_service.py`](tests/test_jobs_service.py) — transitions `PENDING → RUNNING → COMPLETED / FAILED` sur une vraie base. Ces tests sont **ignorés** si PostgreSQL n’est pas joignable ; pour les exécuter : `docker compose up -d postgres`.
 
-- **Poser une question** → `POST /api/ask` : réponse et sources affichées directement. Nécessite Ollama et un index Chroma.
-- **Jobs** → `POST /jobs` crée le travail, puis « Actualiser l’état » appelle `GET /jobs/{id}` : on voit `PENDING`, `RUNNING`, puis `COMPLETED` (ou `FAILED` avec le type `fail`). Le type `ingest` lance la vraie indexation ; le résumé apparaît dans `result`.
+[`tests/conftest.py`](tests/conftest.py) redirige `DATABASE_URL` vers une base **`analyse_test`**, créée au besoin : les tests vident la table `jobs` à chaque cas sans jamais toucher à la base de développement.
 
-Le frontend ne parle **qu’à l’API** : pas d’accès à PostgreSQL, pas d’import du pipeline RAG. Son image ([`frontend/Dockerfile`](frontend/Dockerfile)) ne contient que `streamlit` et `httpx` — environ 0,8 Go contre 2,8 Go pour l’image applicative, qui embarque torch et chromadb.
+`pytest` fait partie de l’environnement de développement ([`environment.yml`](environment.yml)), pas de l’image Docker (le [`Dockerfile`](Dockerfile) ne copie que `src/`).
 
-Hors Docker, il faut indiquer où joindre l’API :
-
-```bash
-API_BASE_URL=http://localhost:8000 streamlit run frontend/app.py
-```
-
-La page HTML servie par FastAPI sur [http://localhost:8000](http://localhost:8000) reste disponible ; les deux interfaces coexistent.
-
-## Registry Docker local (étape 4)
-
-Un **registry** est un dépôt d’images : on y **pousse** une image construite localement, et n’importe quelle machine ayant accès au dépôt peut la **tirer**. Le service `registry` reproduit ce cycle en local, sur `localhost:5001` (le port 5000 est occupé par AirPlay sur macOS).
-
-```bash
-./scripts/registry_cycle.sh v1
-```
-
-Le script enchaîne les quatre étapes, en les affichant :
-
-1. **build** — construire l’image depuis le [`Dockerfile`](Dockerfile) (`analyse-de-docs-app:local`)
-2. **tag** — la renommer avec l’adresse du dépôt : `localhost:5001/analyse-de-docs-app:v1`
-3. **push** — l’envoyer vers le registry
-4. **pull** — la récupérer (la référence locale est supprimée juste avant, pour vérifier que le pull la ramène vraiment)
-
-Le préfixe du tag n’est pas décoratif : c’est lui qui indique à Docker **vers quel dépôt** pousser et **depuis lequel** tirer.
-
-Inspecter le contenu du registry par son API HTTP :
-
-```bash
-curl -s http://localhost:5001/v2/_catalog
-curl -s http://localhost:5001/v2/analyse-de-docs-app/tags/list
-```
-
-Faire tourner la stack depuis l’image du registry plutôt que depuis un build local :
-
-```bash
-APP_IMAGE=localhost:5001/analyse-de-docs-app:v1 docker compose up -d api worker
-docker compose ps    # la colonne IMAGE montre l'image tirée du registry
-```
-
-Sans `APP_IMAGE`, Compose revient au build local (`analyse-de-docs-app:local`) : c’est le mode de travail quotidien.
-
-Le rôle est **conceptuellement** celui d’ECR : même cycle `build → tag → push → pull`, même logique de tags versionnés. Un registry managé y ajoute l’authentification, les droits d’accès, le scan de vulnérabilités et la réplication, absents ici.
-
-Étapes suivantes prévues pour le cas d’étude : évaluation RAGAS, comparaison de configurations.
+Pistes suivantes pour le cas d’étude : évaluation RAGAS, comparaison de configurations, puis migration progressive vers AWS (S3 → EventBridge → Lambda → ECS/Fargate).

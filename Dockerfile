@@ -16,6 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-EXPOSE 8000
-
+# Image commune à l'api et au worker : le port est déclaré par Compose côté api,
+# le worker n'écoute rien. Commande par défaut = api.
 CMD ["python", "-m", "src.web"]

@@ -27,7 +27,7 @@ class JobStatus(str, enum.Enum):
 
 
 class Job(Base):
-    """Une ligne = un travail à faire. L’API crée le job ; un worker (étape suivante) le traitera."""
+    """Une ligne = un travail à faire. L’API crée le job ; le worker l’exécute."""
 
     __tablename__ = "jobs"
 
