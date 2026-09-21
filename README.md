@@ -275,6 +275,7 @@ Un conteneur par rôle, sur le réseau interne de Compose :
 | `worker` | Exécute les jobs, aucun port exposé | — |
 | `postgres` | Table `jobs` | `5432` |
 | `ollama` | LLM local pour le Q&A | `11434` |
+| `registry` | Dépôt d’images local (outil d’apprentissage) | `5001` |
 
 `api` et `worker` partagent **la même image** (`analyse-de-docs-app:local`, construite depuis le [`Dockerfile`](Dockerfile)) : seule la commande de démarrage diffère (`python -m src.web` contre `python -m src.worker`). Un seul code, deux processus — comme deux tâches lancées depuis une même image sur un orchestrateur.
 
@@ -310,5 +311,40 @@ L’image contenant tout le code, la CLI d’ingestion reste disponible telle qu
 ```bash
 docker compose run --rm worker python -m src.ingestion --input-dir /app/Documents --collection technical_docs --reset
 ```
+
+## Registry Docker local (étape 4)
+
+Un **registry** est un dépôt d’images : on y **pousse** une image construite localement, et n’importe quelle machine ayant accès au dépôt peut la **tirer**. Le service `registry` reproduit ce cycle en local, sur `localhost:5001` (le port 5000 est occupé par AirPlay sur macOS).
+
+```bash
+./scripts/registry_cycle.sh v1
+```
+
+Le script enchaîne les quatre étapes, en les affichant :
+
+1. **build** — construire l’image depuis le [`Dockerfile`](Dockerfile) (`analyse-de-docs-app:local`)
+2. **tag** — la renommer avec l’adresse du dépôt : `localhost:5001/analyse-de-docs-app:v1`
+3. **push** — l’envoyer vers le registry
+4. **pull** — la récupérer (la référence locale est supprimée juste avant, pour vérifier que le pull la ramène vraiment)
+
+Le préfixe du tag n’est pas décoratif : c’est lui qui indique à Docker **vers quel dépôt** pousser et **depuis lequel** tirer.
+
+Inspecter le contenu du registry par son API HTTP :
+
+```bash
+curl -s http://localhost:5001/v2/_catalog
+curl -s http://localhost:5001/v2/analyse-de-docs-app/tags/list
+```
+
+Faire tourner la stack depuis l’image du registry plutôt que depuis un build local :
+
+```bash
+APP_IMAGE=localhost:5001/analyse-de-docs-app:v1 docker compose up -d api worker
+docker compose ps    # la colonne IMAGE montre l'image tirée du registry
+```
+
+Sans `APP_IMAGE`, Compose revient au build local (`analyse-de-docs-app:local`) : c’est le mode de travail quotidien.
+
+Le rôle est **conceptuellement** celui d’ECR : même cycle `build → tag → push → pull`, même logique de tags versionnés. Un registry managé y ajoute l’authentification, les droits d’accès, le scan de vulnérabilités et la réplication, absents ici.
 
 Étapes suivantes prévues pour le cas d’étude : évaluation RAGAS, comparaison de configurations.

@@ -1,9 +1,11 @@
 # Orchestrateur local (pédagogique) : un conteneur par rôle.
 # api et worker partagent la même image ; seule la commande de démarrage change.
+# APP_IMAGE permet de faire tourner la stack depuis le registry local :
+#   APP_IMAGE=localhost:5001/analyse-de-docs-app:v1 docker compose up -d api worker
 services:
   api:
     build: .
-    image: analyse-de-docs-app:local
+    image: ${APP_IMAGE:-analyse-de-docs-app:local}
     ports:
       - "8000:8000"
     env_file:
@@ -37,7 +39,7 @@ services:
 
   worker:
     build: .
-    image: analyse-de-docs-app:local
+    image: ${APP_IMAGE:-analyse-de-docs-app:local}
     command: ["python", "-m", "src.worker"]
     env_file:
       - path: .env
@@ -78,7 +80,18 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+  # Outil d'apprentissage, pas un composant de l'application :
+  # un dépôt d'images local pour le cycle build -> tag -> push -> pull.
+  # Port 5000 côté conteneur, 5001 côté hôte (5000 est pris par AirPlay sur macOS).
+  registry:
+    image: registry:2
+    ports:
+      - "5001:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+
 volumes:
   hf_cache:
   ollama_data:
   postgres_data:
+  registry_data:
