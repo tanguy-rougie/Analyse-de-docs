@@ -1,10 +1,16 @@
+# Orchestrateur local (pédagogique) : un conteneur par rôle.
+# api et worker partagent la même image ; seule la commande de démarrage change.
+# APP_IMAGE permet de faire tourner la stack depuis le registry local :
+#   APP_IMAGE=localhost:5001/analyse-de-docs-app:v1 docker compose up -d api worker
 services:
-  app:
+  api:
     build: .
+    image: ${APP_IMAGE:-analyse-de-docs-app:local}
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       CHROMA_PERSIST_DIR: /app/chroma_db
       WEB_HOST: "0.0.0.0"
@@ -14,12 +20,70 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: llama3.2
       OLLAMA_HTTP_TIMEOUT: "600"
+      DATABASE_URL: postgresql+psycopg://analyse:analyse@postgres:5432/analyse
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./Documents:/app/Documents
       - hf_cache:/root/.cache/huggingface
     depends_on:
-      - ollama
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Image distincte et légère : le frontend ne fait que des appels HTTP vers l'api.
+  frontend:
+    build: ./frontend
+    image: ${FRONTEND_IMAGE:-analyse-de-docs-frontend:local}
+    ports:
+      - "8501:8501"
+    environment:
+      API_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker:
+    build: .
+    image: ${APP_IMAGE:-analyse-de-docs-app:local}
+    command: ["python", "-m", "src.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CHROMA_PERSIST_DIR: /app/chroma_db
+      DATABASE_URL: postgresql+psycopg://analyse:analyse@postgres:5432/analyse
+      WORKER_POLL_INTERVAL: "2"
+      WORKER_SIMULATED_DURATION: "3"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./Documents:/app/Documents
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: analyse
+      POSTGRES_PASSWORD: analyse
+      POSTGRES_DB: analyse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyse -d analyse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   ollama:
     image: ollama/ollama:latest
@@ -28,6 +92,18 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+  # Outil d'apprentissage, pas un composant de l'application :
+  # un dépôt d'images local pour le cycle build -> tag -> push -> pull.
+  # Port 5000 côté conteneur, 5001 côté hôte (5000 est pris par AirPlay sur macOS).
+  registry:
+    image: registry:2
+    ports:
+      - "5001:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+
 volumes:
   hf_cache:
   ollama_data:
+  postgres_data:
+  registry_data:

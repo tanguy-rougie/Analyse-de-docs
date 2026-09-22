@@ -1,8 +1,9 @@
-"""FastAPI web UI for RAG questions."""
+"""FastAPI web UI for RAG questions + API jobs (PostgreSQL)."""
 
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from src.env import load_env
@@ -14,12 +15,28 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from src.jobs.database import init_db
 from src.retrieval.rag import answer_question
+from src.web.controllers.health import router as health_router
+from src.web.controllers.jobs import router as jobs_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DEFAULT_COLLECTION = os.environ.get("RAG_COLLECTION", "technical_docs").strip() or "technical_docs"
 
-app = FastAPI(title="Analyse-de-docs", description="Interroger la documentation technique en langage naturel.")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(
+    title="Analyse-de-docs",
+    description="Interroger la documentation technique en langage naturel.",
+    lifespan=lifespan,
+)
+app.include_router(health_router)
+app.include_router(jobs_router)
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

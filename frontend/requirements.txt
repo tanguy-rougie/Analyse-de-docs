@@ -1,0 +1,3 @@
+# Le frontend ne fait que des appels HTTP : ni torch, ni chromadb, ni sentence-transformers.
+streamlit>=1.30.0
+httpx>=0.27.0
